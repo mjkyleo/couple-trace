@@ -1,0 +1,37 @@
+# ---- Node / 云函数 ----
+node_modules/
+dist/
+*.log
+.env
+.env.local
+
+# ---- Flutter / Dart ----
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/build/
+app/.packages
+app/.pub-cache/
+app/.pub/
+app/android/.gradle/
+app/android/app/.cxx/
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/ephemeral/
+app/linux/flutter/ephemeral/
+app/macos/Flutter/ephemeral/
+app/windows/flutter/ephemeral/
+*.iml
+
+# 密钥与本地配置（切勿提交真实 AK/SK）
+*.pem
+*.key
+secrets/
+
+# ---- 通用 ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.tmp

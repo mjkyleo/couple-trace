@@ -1,0 +1,38 @@
+name: trace_app
+description: "Trace · 同迹 — 双人私密时光记录 App（Flutter 客户端）"
+publish_to: 'none'
+
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 本地缓存
+  drift: ^2.20.0
+  drift_flutter: ^0.2.0
+  path: ^1.9.0
+  path_provider: ^2.1.5
+
+  # 状态管理 & 网络
+  flutter_riverpod: ^2.6.1
+  dio: ^5.7.0
+
+  # 媒体处理
+  flutter_image_compress: ^2.3.0
+  video_compress: ^3.1.1
+  video_player: ^2.9.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.20.0
+  build_runner: ^2.4.13
+
+flutter:
+  uses-material-design: true

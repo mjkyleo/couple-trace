@@ -131,13 +131,43 @@ describe('extractCoupleId', () => {
 
 describe('resolveUid', () => {
   const token = jwt.sign({ sub: 'user-001' }, 'test-secret', { expiresIn: '1h' });
+  const wrongKeyToken = jwt.sign({ sub: 'user-001' }, 'other-secret', { expiresIn: '1h' });
+  const unsignedToken = [
+    Buffer.from('{"alg":"none","typ":"JWT"}').toString('base64url'),
+    Buffer.from(JSON.stringify({ sub: 'user-001' })).toString('base64url'),
+    '',
+  ].join('.');
 
-  it('从 Bearer JWT 解析 sub', () => {
+  afterEach(() => {
+    delete process.env.TRACE_JWT_SECRET;
+    delete process.env.TRACE_ALLOW_INSECURE_DEV_AUTH;
+  });
+
+  it('配置密钥：验签通过的 Bearer JWT 解析出 sub', () => {
+    process.env.TRACE_JWT_SECRET = 'test-secret';
     expect(resolveUid({ headers: { authorization: `Bearer ${token}` } })).toBe('user-001');
   });
 
-  it('从 X-Trace-User-Id 头解析（本地开发）', () => {
+  it('配置密钥：密钥不符或无签名的 token 一律拒绝', () => {
+    process.env.TRACE_JWT_SECRET = 'test-secret';
+    expect(resolveUid({ headers: { authorization: `Bearer ${wrongKeyToken}` } })).toBeNull();
+    expect(resolveUid({ headers: { authorization: `Bearer ${unsignedToken}` } })).toBeNull();
+  });
+
+  it('未配置密钥：不退回只解码，直接拒绝', () => {
+    delete process.env.TRACE_JWT_SECRET;
+    expect(resolveUid({ headers: { authorization: `Bearer ${token}` } })).toBeNull();
+  });
+
+  it('显式开启开发开关后，才接受无签名 token 与 X-Trace-User-Id 头', () => {
+    process.env.TRACE_ALLOW_INSECURE_DEV_AUTH = '1';
+    expect(resolveUid({ headers: { authorization: `Bearer ${token}` } })).toBe('user-001');
     expect(resolveUid({ headers: { 'x-trace-user-id': 'local-user' } })).toBe('local-user');
+  });
+
+  it('未开启开发开关时 X-Trace-User-Id 头不被信任', () => {
+    delete process.env.TRACE_ALLOW_INSECURE_DEV_AUTH;
+    expect(resolveUid({ headers: { 'x-trace-user-id': 'local-user' } })).toBeNull();
   });
 
   it('无认证信息返回 null', () => {
@@ -270,7 +300,9 @@ describe('S3Provider', () => {
 // ---------------- authorizeCouple ----------------
 
 describe('authorizeCouple', () => {
-  it('未配置 Supabase 时跳过校验返回 true', async () => {
-    await expect(authorizeCouple('u1', 'c1')).resolves.toBe(true);
+  it('未配置 Supabase 时拒绝放行（fail closed）', async () => {
+    await expect(authorizeCouple('u1', 'c1')).rejects.toThrow(
+      /SUPABASE_URL \/ SUPABASE_SERVICE_ROLE_KEY not configured/,
+    );
   });
 });

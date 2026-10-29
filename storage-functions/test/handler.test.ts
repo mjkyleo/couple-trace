@@ -56,6 +56,8 @@ function makeReq(overrides: {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  process.env.TRACE_JWT_SECRET = 'test-secret';
+  delete process.env.TRACE_ALLOW_INSECURE_DEV_AUTH;
   (authorizeCouple as jest.Mock).mockResolvedValue(true);
   mockProvider.getUploadUrl.mockResolvedValue('https://up.example.com?sign');
   mockProvider.getDownloadUrl.mockResolvedValue('https://dl.example.com?sign');
@@ -66,6 +68,34 @@ describe('云函数入口 handler', () => {
   it('无认证 → 401', async () => {
     const res = makeRes();
     await getUploadSign({ headers: {}, body: { objectKey: 'c1/x.jpg' } }, res);
+    expect(res._status).toBe(401);
+  });
+
+  it('无签名 / 错误密钥的 JWT → 401（不再只解码 payload）', async () => {
+    const unsigned = [
+      Buffer.from('{"alg":"none","typ":"JWT"}').toString('base64url'),
+      Buffer.from(JSON.stringify({ sub: 'victim-001' })).toString('base64url'),
+      '',
+    ].join('.');
+    const wrongKey = jwt.sign({ sub: 'victim-001' }, 'other-secret');
+
+    for (const forged of [unsigned, wrongKey]) {
+      const res = makeRes();
+      await getUploadSign(
+        { headers: { authorization: `Bearer ${forged}` }, body: { objectKey: 'c1/x.jpg' } },
+        res,
+      );
+      expect(res._status).toBe(401);
+    }
+    expect(mockProvider.getUploadUrl).not.toHaveBeenCalled();
+  });
+
+  it('未开启开发开关时 X-Trace-User-Id 头不被信任 → 401', async () => {
+    const res = makeRes();
+    await getUploadSign(
+      { headers: { 'x-trace-user-id': 'attacker' }, body: { objectKey: 'c1/x.jpg' } },
+      res,
+    );
     expect(res._status).toBe(401);
   });
 

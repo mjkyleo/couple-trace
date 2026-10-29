@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/error_text.dart';
 import '../providers.dart';
 
 /// 情侣绑定页：创建空间（生成邀请码）或输入邀请码加入
@@ -44,7 +45,7 @@ class _BindPageState extends ConsumerState<BindPage> {
       if (!mounted) return;
       Navigator.of(context).pushReplacementNamed('/timeline');
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = describeError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -60,7 +61,7 @@ class _BindPageState extends ConsumerState<BindPage> {
       if (!mounted) return;
       Navigator.of(context).pushReplacementNamed('/timeline');
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = describeError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

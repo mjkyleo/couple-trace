@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/error_text.dart';
 import '../../db/app_database.dart';
 import '../../models/models.dart';
 import '../providers.dart';
@@ -36,7 +37,7 @@ class _TimelinePageState extends ConsumerState<TimelinePage> {
         _moments = await _loadMoments(_couple!);
       }
     } catch (e) {
-      _loadError = e.toString();
+      _loadError = describeError(e, fallback: '稍后下拉刷新再试');
     } finally {
       if (mounted) setState(() => _loaded = true);
     }

@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 
+import '../core/error_text.dart';
 import '../models/models.dart';
 import 'moment_service.dart';
 import 'storage_service.dart';
@@ -121,7 +122,7 @@ class MediaService {
       try {
         uploaded.add(await publish(momentId, coupleId, paths[i], sort: i));
       } catch (e) {
-        error ??= e.toString();
+        error ??= describeError(e);
       }
     }
     return MediaBatchResult(uploaded: uploaded, error: error);

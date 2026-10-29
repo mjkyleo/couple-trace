@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/error_text.dart';
 import '../providers.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -38,7 +39,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       if (!mounted) return;
       Navigator.of(context).pushReplacementNamed('/bind');
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = describeError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -1,7 +1,10 @@
+import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/error_text.dart';
 import '../../models/models.dart';
 import '../providers.dart';
 import '../theme.dart';
@@ -56,7 +59,8 @@ class _PublishPageState extends ConsumerState<PublishPage> {
       }
     } catch (e) {
       // 无相册权限 / 桌面端没有实现 —— 降级为纯文字动态，不阻断发布
-      if (mounted) setState(() => _error = '选择媒体失败，可先发文字：$e');
+      developer.log('$e', name: 'trace.pick');
+      if (mounted) setState(() => _error = '选图或选视频没成功，可以先只发文字');
     }
   }
 
@@ -104,7 +108,7 @@ class _PublishPageState extends ConsumerState<PublishPage> {
       if (!mounted) return;
       Navigator.of(context).pop(created);
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() => _error = describeError(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../core/error_text.dart';
 import '../providers.dart';
 
 /// 媒体预览页：图片可缩放，视频用 video_player 内嵌播放。
@@ -98,7 +99,7 @@ class _VideoViewState extends State<_VideoView> with WidgetsBindingObserver {
       // 所以先切到降级 UI，再后台释放，不能 await。
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = describeError(e, fallback: '可能是网络不稳定或格式不支持');
           _loading = false;
         });
       }

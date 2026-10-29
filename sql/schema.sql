@@ -86,9 +86,31 @@ create index idx_moment_media_moment on moment_media (moment_id);
 
 alter table moment_media enable row level security;
 
--- 注意：与早期草案不同，此处为正确写法 m.id = moment_media.moment_id
+-- 关联条件必须是 m.id = moment_media.moment_id（写成 moments.couple_id 会全表越权）
 create policy media_select on moment_media
   for select using (
+    exists (
+      select 1 from moments m
+      join couples c on m.couple_id = c.id
+      where m.id = moment_media.moment_id
+        and (c.user_a = auth.uid() or c.user_b = auth.uid())
+    )
+  );
+
+-- 只能给「自己发布、且属于本人情侣空间」的动态挂媒体
+create policy media_insert on moment_media
+  for insert with check (
+    exists (
+      select 1 from moments m
+      join couples c on m.couple_id = c.id
+      where m.id = moment_media.moment_id
+        and m.publisher_id = auth.uid()
+        and (c.user_a = auth.uid() or c.user_b = auth.uid())
+    )
+  );
+
+create policy media_delete on moment_media
+  for delete using (
     exists (
       select 1 from moments m
       join couples c on m.couple_id = c.id
@@ -101,6 +123,7 @@ create policy media_select on moment_media
 -- 4. 邀请码绑定 RPC（安全实现）
 --    客户端不能直接按 invite_code 查询/更新 couples（RLS 会拦截），
 --    必须通过 security definer 函数完成：输入邀请码 + 当前用户 id。
+--    p_user 必须等于 auth.uid()，否则任何人都能替任意 uuid 完成绑定。
 -- ------------------------------------------------------------
 create or replace function join_couple(p_invite_code text, p_user uuid)
 returns uuid
@@ -111,6 +134,10 @@ as $$
 declare
   v_couple couples%rowtype;
 begin
+  if p_user is distinct from auth.uid() then
+    raise exception 'forbidden: can only join couple for the authenticated user';
+  end if;
+
   select * into v_couple
   from couples
   where invite_code = p_invite_code
@@ -134,11 +161,18 @@ begin
 end;
 $$;
 
+-- 函数默认对 PUBLIC 授权；收紧到仅登录角色可用
+revoke execute on function join_couple(text, uuid) from public, anon;
+grant execute on function join_couple(text, uuid) to authenticated;
+
 -- ------------------------------------------------------------
 -- 5. 常用查询辅助视图（可选）
 --    一条动态 + 其媒体清单，仅在当前情侣空间内可见
+--    security_invoker = true：视图继承调用者权限，底层表的 RLS 照常生效；
+--    缺了这个选项，视图会以 owner（BYPASSRLS）权限执行，任何登录用户可读全部情侣的动态。
 -- ------------------------------------------------------------
-create or replace view couple_moments_view as
+create or replace view couple_moments_view
+with (security_invoker = true) as
 select
   m.id as moment_id,
   m.couple_id,
@@ -152,3 +186,12 @@ select
   mm.sort
 from moments m
 left join moment_media mm on mm.moment_id = m.id;
+
+-- ------------------------------------------------------------
+-- 6. 表权限：PostgREST 角色只给必需的读写，显式排除 anon
+--    （RLS 已是第二道防线，此处避免匿名角色拿到整表授权）
+-- ------------------------------------------------------------
+revoke all on table couples, moments, moment_media from anon;
+revoke all on table couple_moments_view from anon;
+grant select, insert, delete on table couples, moments, moment_media to authenticated;
+grant select on table couple_moments_view to authenticated;

@@ -1,13 +1,16 @@
-name: Build Android APK
+name: Verify & Build Android APK
 
 on:
   push:
     branches: [ main ]
     paths:
       - 'app/**'
+      - 'storage-functions/**'
+      - 'sql/**'
       - '.github/workflows/**'
     tags:
       - 'v*'
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -15,7 +18,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 测试门禁：云函数与 Flutter 任一项失败都不再构建 APK
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 仓库不含锁文件，故用 npm install 而非 npm ci
+      - name: Install cloud function deps
+        working-directory: storage-functions
+        run: npm install --no-audit --no-fund
+
+      - name: Build cloud functions
+        working-directory: storage-functions
+        run: npm run build
+
+      - name: Test cloud functions
+        working-directory: storage-functions
+        run: npm test
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install app dependencies
+        working-directory: app
+        run: flutter pub get
+
+      - name: Generate Drift code
+        working-directory: app
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze
+        working-directory: app
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        working-directory: app
+        run: flutter test
+
   build-apk:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

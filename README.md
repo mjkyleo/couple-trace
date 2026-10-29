@@ -70,10 +70,11 @@ MemFire PostgreSQL（唯一权威数据源）
 - 时间轴与详情页 3 列缩略图网格（走签名 URL，不强制下载）；点击进全屏预览
 - 删除动态时一并删除对象存储文件，避免留下无人引用的计费对象
 - 视频按原文件直传（`video_compress` 已从依赖移除：其原生层未在 Dart 3.13 上验证）
+- 视频内嵌播放：预览页用 `video_player` 播签名 URL，带播放/暂停、进度条、切后台暂停、失败重试（**未在真机验证**）
 
 尚未实现：
 
-- 视频内嵌播放（`video_player` 在依赖中，预览页仍为占位）
+- 视频离线观看（先经 `CacheService.resolve()` 落盘再播）
 - 日历视图、心情打卡、"那年今天"回顾
 - 编辑时增删媒体（当前只能改文字与地点）
 
@@ -233,7 +234,16 @@ select ...;
 
 ### 5. 二期增量：`sql/schema_v2.sql`
 
-在 `schema.sql` 之后执行，幂等可重跑。**本机没有 Postgres，这批 SQL 只做过静态编写，必须在 MemFire SQL 编辑器里执行并跑文件末尾的自检清单。**
+在 `schema.sql` 之后执行，幂等可重跑。**已在本地 PostgreSQL 15.14 上实跑验证**：`schema.sql` → `schema_v2.sql`（连跑两次验幂等）→ 47 项 RLS / 权限 / 触发器检查全部通过，其中 20 项是「必须失败」的反向用例（伪造 `publisher_id`、越权发动态、改归属列、跨动态挂回复等）。
+
+复跑方式（任意一台能连的 PG 15+，脚本会自建 `trace_verify` 库）：
+
+```bash
+PSQL=/path/to/psql PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres \
+  bash sql/verify/run_local_checks.sh
+```
+
+脚本只验证 PostgreSQL 层语义（策略、列级授权、触发器、`security_invoker` 视图），**不覆盖 PostgREST 的 HTTP 行为**（内嵌 `select`、`Prefer: return=representation`、JWT 签发），那部分仍需在 MemFire 实例上联调。
 
 ```sql
 -- 动态可编辑：作者本人 + 改完仍须是自己空间的自己动态
@@ -269,6 +279,11 @@ v2 同时收紧了 v1 的两处插入策略：
 
 - **不要在 RLS 的 `with check` 里用子查询自比对新旧行。** PG 是在新元组写入之后才求值 WITH CHECK，自引用子查询读到的就是新值，条件恒真、形同虚设。列不可变请用列级 `grant update (col)`。
 - **跨行约束（评论的 `parent_id` 必须属于同一条动态）CHECK 表达不了**，用 `before insert or update` 触发器。
+
+实跑时又抓出两个静态看不出、但会让功能直接不可用的缺陷，都已在 v2 里修掉：
+
+- `couples.user_b` 在 v1 是 `not null`，而绑定流程要求「先建一个空位空间等对方进来」（客户端只写 `user_a + invite_code`），两者互斥 → 建空间必失败。v2 补 `alter table couples alter column user_b drop not null`。
+- v2 的视图把 `location_text`/`updated_at` 插在了中间，列序与 v1 不同，而 `create or replace view` **不允许改列序**，会报 `cannot change name of view column`，导致后面的 `grant` 全部没执行。改为 `drop view` + `create` + 补回授权。
 
 ## 七、云函数多存储适配架构
 
@@ -454,16 +469,17 @@ export PUB_HOSTED_URL=https://pub.flutter-io.cn
 
 1. 注册 MemFire Cloud，开启邮箱登录
 2. 执行 [`sql/schema.sql`](sql/schema.sql)，验证 RLS 权限
-3. 执行 [`sql/schema_v2.sql`](sql/schema_v2.sql)（编辑/评论/定位/纪念日），跑文件末尾自检清单
-4. 部署云函数多存储适配器（`storage-functions/`）
-5. 配置对应存储厂商环境变量与鉴权环境变量（参考 `.env.example`）
-6. Flutter 初始化项目、依赖引入（`app/`）
-7. 完成登录、情侣绑定与绑定门禁逻辑
-8. 完成动态 CRUD：发布、编辑、删除
-9. 完成评论与回复、定位手动输入
-10. 接入存储上传、下载、缓存与媒体网格展示
-11. 双人真机联调、断网测试、权限测试（媒体链路目前只过了单元测试，未在真机跑过）
-12. 美化 UI、发布开源版本
+3. 执行 [`sql/schema_v2.sql`](sql/schema_v2.sql)（编辑/评论/定位/纪念日）
+4. （可选）本地先跑一遍 [`sql/verify/run_local_checks.sh`](sql/verify/run_local_checks.sh)，47 项检查全绿再上 MemFire，省得在线上反复试
+5. 部署云函数多存储适配器（`storage-functions/`）
+6. 配置对应存储厂商环境变量与鉴权环境变量（参考 `.env.example`）
+7. Flutter 初始化项目、依赖引入（`app/`）
+8. 完成登录、情侣绑定与绑定门禁逻辑
+9. 完成动态 CRUD：发布、编辑、删除
+10. 完成评论与回复、定位手动输入
+11. 接入存储上传、下载、缓存与媒体网格展示
+12. 双人真机联调、断网测试、权限测试（媒体链路目前只过了单元测试，未在真机跑过）
+13. 美化 UI、发布开源版本
 
 ## 十四、二期可扩展功能
 
@@ -473,7 +489,7 @@ export PUB_HOSTED_URL=https://pub.flutter-io.cn
 - 日历视图、心情打卡、「那年今天」回顾
 - 定位接入地图 SDK（`location_lat/lng` 已留列，当前只有手动文本）
 - 编辑动态时增删媒体
-- 视频内嵌播放（`video_player` 已在依赖中，预览页仍为占位）
+- 视频离线观看（播放器已接，落盘缓存未接）
 - 自动 LRU 缓存清理
 - 图片缩略图自动生成
 - 大视频断点续传

@@ -95,6 +95,12 @@ create policy couple_insert on couples
     and user_b is null
   );
 
+-- v1 的 user_b 是 not null，但绑定流程是"发起方先建一个空位空间再等对方进来"：
+-- 客户端创建时只写 user_a + invite_code，上面的 couple_insert 也要求 user_b 为空。
+-- 两者必须同时成立，否则建空间这一步必然失败（null 违反 not null，
+-- 或为了满足 not null 而绕过策略凭空写一个伴侣）。
+alter table couples alter column user_b drop not null;
+
 -- couples 的"在一起起始日"双方都可改
 alter table couples add column if not exists started_on date;
 
@@ -232,8 +238,13 @@ create policy anniversary_rw on anniversaries
 -- ------------------------------------------------------------
 -- 7. 辅助视图补齐新列（v1 视图缺 updated_at/location，
 --    保留视图是为了给"一次拿动态+媒体"的老调用方兼容）
+--    注意：新列插在了中间，列序与 v1 不同，
+--    create or replace view 不允许改列序（会报 cannot change name
+--    of view column），因此必须 drop + create，并补回授权。
 -- ------------------------------------------------------------
-create or replace view couple_moments_view
+drop view if exists couple_moments_view;
+
+create view couple_moments_view
 with (security_invoker = true) as
 select
   m.id            as moment_id,
@@ -265,6 +276,10 @@ grant select, insert, update, delete on table anniversaries to authenticated;
 grant update (content, location_text, location_lat, location_lng)
   on table moments to authenticated;
 grant update (started_on) on table couples to authenticated;
+
+-- 视图被重建过，授权要跟着补回（drop view 会一并丢掉 ACL）
+revoke all on table couple_moments_view from anon;
+grant select on table couple_moments_view to authenticated;
 
 -- ------------------------------------------------------------
 -- 9. 自检（在 MemFire 里逐条跑，确认迁移生效）

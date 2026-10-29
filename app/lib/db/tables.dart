@@ -6,11 +6,35 @@ class LocalMoments extends Table {
   TextColumn get coupleId => text()();
   TextColumn get publisherId => text()();
   TextColumn get content => text().nullable()();
+  TextColumn get locationText => text().nullable()();
   DateTimeColumn get createdAt => dateTime()();
   DateTimeColumn get updatedAt => dateTime()();
 
   @override
   Set<Column<Object>> get primaryKey => {id};
+}
+
+/// 本地缓存：评论（parent_id 为空是评论，非空是对评论的回复）
+class LocalMomentComments extends Table {
+  TextColumn get id => text()();
+  TextColumn get momentId => text()();
+  TextColumn get authorId => text()();
+  TextColumn get parentId => text().nullable()();
+  TextColumn get body => text()();
+  DateTimeColumn get createdAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// 本地个性化偏好：每对情侣独立部署，观感设置只属于这台设备，
+/// 不上云（云里只留纪念日这类双方共享的数据）。
+class LocalPrefs extends Table {
+  TextColumn get prefKey => text()();
+  TextColumn get prefValue => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {prefKey};
 }
 
 /// 本地缓存：动态媒体表

@@ -7,10 +7,17 @@ import '../db/app_database.dart';
 import '../services/auth_service.dart';
 import '../services/cache_service.dart';
 import '../services/couple_service.dart';
+import '../services/media_service.dart';
 import '../services/moment_service.dart';
 import '../services/storage_service.dart';
+import 'theme.dart';
 
 /// 全局依赖注入（main 中必须 override tokenStoreProvider）
+
+/// 字号档位：观感类偏好只存本机（每对情侣独立部署，没必要上云）
+final textScaleProvider = StateProvider<TextScaleLevel>(
+  (ref) => TextScaleLevel.normal,
+);
 
 final dioProvider = Provider<Dio>((ref) => Dio(
       BaseOptions(
@@ -49,6 +56,13 @@ final momentServiceProvider = Provider<MomentService>(
 
 final storageServiceProvider = Provider<StorageService>(
   (ref) => StorageService(ref.watch(apiClientProvider)),
+);
+
+final mediaServiceProvider = Provider<MediaService>(
+  (ref) => MediaService(
+    ref.watch(storageServiceProvider),
+    ref.watch(momentServiceProvider),
+  ),
 );
 
 final cacheServiceProvider = Provider<CacheService>(

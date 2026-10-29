@@ -113,4 +113,87 @@ void main() {
     await db.clearAll();
     expect(await db.cachedMoments('c1'), isEmpty);
   });
+
+  test('评论按时间正序缓存，删除动态时一并清掉', () async {
+    await db.upsertMoments([
+      LocalMoment(
+        id: 'm1',
+        coupleId: 'c1',
+        publisherId: 'u1',
+        content: 'x',
+        createdAt: DateTime(2026, 10, 1),
+        updatedAt: DateTime(2026, 10, 1),
+      ),
+    ]);
+    await db.upsertComments([
+      LocalMomentComment(
+        id: 'c2',
+        momentId: 'm1',
+        authorId: 'u2',
+        body: '回复',
+        parentId: 'c1',
+        createdAt: DateTime(2026, 10, 1, 12),
+      ),
+      LocalMomentComment(
+        id: 'c1',
+        momentId: 'm1',
+        authorId: 'u1',
+        body: '首评',
+        createdAt: DateTime(2026, 10, 1, 10),
+      ),
+    ]);
+    var rows = await db.commentsOf('m1');
+    expect(rows.map((r) => r.id), ['c1', 'c2']); // 正序
+    expect(rows.last.parentId, 'c1');
+
+    await db.removeComment('c1');
+    expect(await db.commentsOf('m1'), hasLength(1));
+
+    await db.removeMoment('m1');
+    expect(await db.commentsOf('m1'), isEmpty);
+  });
+
+  test('定位列可写入并读回', () async {
+    await db.upsertMoments([
+      LocalMoment(
+        id: 'm1',
+        coupleId: 'c1',
+        publisherId: 'u1',
+        content: 'x',
+        locationText: '公司楼下 · 馄饨摊',
+        createdAt: DateTime(2026, 10, 1),
+        updatedAt: DateTime(2026, 10, 1),
+      ),
+    ]);
+    final rows = await db.cachedMoments('c1');
+    expect(rows.single.locationText, '公司楼下 · 馄饨摊');
+  });
+
+  test('偏好设置同 key 覆盖，且不随 clearAll 丢失', () async {
+    expect(await db.pref('theme_accent'), isNull);
+    await db.setPref('theme_accent', 'FF2F5D8C');
+    await db.setPref('text_scale', 'large');
+    expect(await db.pref('theme_accent'), 'FF2F5D8C');
+
+    await db.setPref('theme_accent', 'FFC08A18');
+    expect(await db.pref('theme_accent'), 'FFC08A18');
+
+    await db.upsertMoments([
+      LocalMoment(
+        id: 'm1',
+        coupleId: 'c1',
+        publisherId: 'u1',
+        content: 'x',
+        createdAt: DateTime(2026, 10, 1),
+        updatedAt: DateTime(2026, 10, 1),
+      ),
+    ]);
+    await db.clearAll();
+    // 「清理本地缓存」不该把用户的观感设置一起清掉
+    expect(await db.pref('theme_accent'), 'FFC08A18');
+    expect(await db.cachedMoments('c1'), isEmpty);
+
+    await db.removePref('theme_accent');
+    expect(await db.pref('theme_accent'), isNull);
+  });
 }

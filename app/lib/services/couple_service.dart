@@ -51,4 +51,23 @@ class CoupleService {
     if (list.isEmpty) return null;
     return Couple.fromJson(list.first as Map<String, dynamic>);
   }
+
+  /// 只有双方都填上的空间才算可用；发起方创建后对方还没输入邀请码时，
+  /// user_b 为空，此时不应进入时光轴（否则等于一个人对着空房间记录）。
+  Future<Couple?> myPairedCouple() async {
+    final couple = await myCouple();
+    if (couple == null || !couple.isPaired) return null;
+    return couple;
+  }
+
+  /// 设置「在一起的第一天」，双方共享，用于时光轴顶部天数
+  Future<void> setStartedOn(DateTime date) async {
+    final couple = await myCouple();
+    if (couple == null) throw StateError('no couple bound');
+    await _api.dbUpdate(
+      'couples',
+      query: {'id': 'eq.${couple.id}'},
+      body: {'started_on': date.toIso8601String().substring(0, 10)},
+    );
+  }
 }

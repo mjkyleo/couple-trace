@@ -22,6 +22,8 @@ app/ios/Flutter/ephemeral/
 app/linux/flutter/ephemeral/
 app/macos/Flutter/ephemeral/
 app/windows/flutter/ephemeral/
+# Drift/build_runner 产物：CI 与本地都按 README 十二节先跑 build_runner 再 analyze/test
+app/**/*.g.dart
 *.iml
 
 # 密钥与本地配置（切勿提交真实 AK/SK）

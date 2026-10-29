@@ -189,6 +189,204 @@ void main() {
     });
   });
 
+  group('MomentService 编辑与评论', () {
+    test('updateMoment 走 PATCH 并带 representation', () async {
+      final adapter = FakeDioAdapter();
+      final tokens = InMemoryTokenStore();
+      adapter.onRequest = (options) {
+        expect(options.method, 'PATCH');
+        expect(options.uri.path, endsWith('/rest/v1/moments'));
+        expect(options.uri.queryParameters['id'], 'eq.mom1');
+        expect(options.headers['Prefer'], 'return=representation');
+        final body = decodeBody(options);
+        expect(body['content'], '改过的内容');
+        expect(body['location_text'], '公司楼下');
+        // 归属字段不出现在请求体里：客户端压根不该尝试改
+        expect(body.containsKey('publisher_id'), isFalse);
+        expect(body.containsKey('couple_id'), isFalse);
+        return jsonResponse([
+          {
+            'id': 'mom1',
+            'couple_id': 'c1',
+            'publisher_id': 'u1',
+            'content': '改过的内容',
+            'location_text': '公司楼下',
+            'created_at': '2026-10-29T10:00:00Z',
+            'updated_at': '2026-10-29T18:00:00Z',
+          }
+        ]);
+      };
+      final m = await MomentService(makeApi(adapter, tokens))
+          .updateMoment('mom1', content: '改过的内容', locationText: '公司楼下');
+      expect(m.content, '改过的内容');
+      expect(m.isEdited, isTrue);
+    });
+
+    test('updateMoment 无字段可改时直接抛错，不发请求', () async {
+      final adapter = FakeDioAdapter();
+      final api = makeApi(adapter, InMemoryTokenStore());
+      expect(
+        () => MomentService(api).updateMoment('mom1'),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(adapter.requests, isEmpty);
+    });
+
+    test('addComment 写入 moment_comments 并回传行', () async {
+      final adapter = FakeDioAdapter();
+      adapter.onRequest = (options) {
+        expect(options.uri.path, endsWith('/rest/v1/moment_comments'));
+        final body = decodeBody(options);
+        expect(body['moment_id'], 'mom1');
+        expect(body['author_id'], 'u2');
+        expect(body['parent_id'], 'cm0');
+        return jsonResponse([
+          {
+            'id': 'cm1',
+            'moment_id': 'mom1',
+            'author_id': 'u2',
+            'body': '回复',
+            'parent_id': 'cm0',
+          }
+        ]);
+      };
+      final c = await MomentService(makeApi(adapter, InMemoryTokenStore()))
+          .addComment('mom1', 'u2', '回复', parentId: 'cm0');
+      expect(c.id, 'cm1');
+      expect(c.parentId, 'cm0');
+    });
+
+    test('deleteComment 按 id 删除', () async {
+      final adapter = FakeDioAdapter();
+      adapter.onRequest = (options) {
+        expect(options.method, 'DELETE');
+        expect(options.uri.path, endsWith('/rest/v1/moment_comments'));
+        expect(options.uri.queryParameters['id'], 'eq.cm1');
+        return jsonResponse([]);
+      };
+      await MomentService(makeApi(adapter, InMemoryTokenStore()))
+          .deleteComment('cm1');
+      expect(adapter.requests, hasLength(1));
+    });
+
+    test('listMoments 带内嵌 select，一次取回媒体与评论', () async {
+      final adapter = FakeDioAdapter();
+      adapter.onRequest = (options) {
+        expect(options.uri.path, endsWith('/rest/v1/moments'));
+        expect(
+          options.uri.queryParameters['select'],
+          '*,moment_media(*),moment_comments(*)',
+        );
+        return jsonResponse([
+          {
+            'id': 'mom1',
+            'couple_id': 'c1',
+            'publisher_id': 'u1',
+            'content': 'x',
+            'moment_media': [
+              {
+                'id': 'mm1',
+                'moment_id': 'mom1',
+                'object_key': 'c1/a.jpg',
+                'media_type': 'image',
+              }
+            ],
+            'moment_comments': [
+              {
+                'id': 'cm1',
+                'moment_id': 'mom1',
+                'author_id': 'u2',
+                'body': '好',
+              }
+            ],
+          }
+        ]);
+      };
+      final list =
+          await MomentService(makeApi(adapter, InMemoryTokenStore()))
+              .listMoments('c1');
+      expect(list.single.media, hasLength(1));
+      expect(list.single.comments, hasLength(1));
+    });
+
+    test('内嵌查询失败时降级为普通查询（库未执行 schema_v2）', () async {
+      final adapter = FakeDioAdapter();
+      var embeddedRequested = 0;
+      adapter.onRequest = (options) {
+        if (options.uri.queryParameters['select'] != null) {
+          embeddedRequested++;
+          return jsonResponse(
+            {'code': '42P01', 'message': 'relation "moment_comments" does not exist'},
+            status: 404,
+          );
+        }
+        return jsonResponse([
+          {
+            'id': 'mom1',
+            'couple_id': 'c1',
+            'publisher_id': 'u1',
+            'content': '老库数据',
+          }
+        ]);
+      };
+      final list =
+          await MomentService(makeApi(adapter, InMemoryTokenStore()))
+              .listMoments('c1');
+      expect(embeddedRequested, 1);
+      expect(list.single.content, '老库数据');
+      expect(list.single.media, isEmpty);
+    });
+  });
+
+  group('CoupleService 绑定门禁', () {
+    test('myPairedCouple 在 user_b 为空时返回 null', () async {
+      final adapter = FakeDioAdapter();
+      adapter.onRequest = (options) => jsonResponse([
+            {
+              'id': 'c1',
+              'user_a': 'u1',
+              'invite_code': 'A7K2Q9X4',
+            }
+          ]);
+      final svc = CoupleService(makeApi(adapter, InMemoryTokenStore()));
+      expect(await svc.myCouple(), isNotNull);
+      expect(await svc.myPairedCouple(), isNull);
+    });
+
+    test('setStartedOn 只 PATCH started_on 一列', () async {
+      final adapter = FakeDioAdapter();
+      adapter.onRequest = (options) {
+        if (options.method == 'GET') {
+          return jsonResponse([
+            {
+              'id': 'c1',
+              'user_a': 'u1',
+              'user_b': 'u2',
+              'invite_code': 'A7K2Q9X4',
+            }
+          ]);
+        }
+        expect(options.method, 'PATCH');
+        expect(options.uri.path, endsWith('/rest/v1/couples'));
+        expect(options.headers['Prefer'], 'return=representation');
+        final body = decodeBody(options);
+        expect(body.keys, ['started_on']);
+        expect(body['started_on'], '2025-08-02');
+        return jsonResponse([
+          {
+            'id': 'c1',
+            'user_a': 'u1',
+            'user_b': 'u2',
+            'invite_code': 'A7K2Q9X4',
+            'started_on': '2025-08-02',
+          }
+        ]);
+      };
+      await CoupleService(makeApi(adapter, InMemoryTokenStore()))
+          .setStartedOn(DateTime(2025, 8, 2));
+    });
+  });
+
   group('StorageService', () {
     test('getUploadSign 调用云函数并返回 url', () async {
       final adapter = FakeDioAdapter();

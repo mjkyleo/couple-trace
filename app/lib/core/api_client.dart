@@ -11,14 +11,12 @@ import 'token_store.dart';
 /// - 存储云函数接口：`{storageFnUrl}/storage/*`
 class ApiClient {
   ApiClient({
-    required Dio dio,
-    required TokenStore tokens,
+    required this._dio,
+    required this._tokens,
     String? supabaseUrl,
     String? anonKey,
-  })  : _dio = dio,
-        _tokens = tokens,
-        _supabaseUrl = supabaseUrl ?? AppConfig.supabaseUrl,
-        _anonKey = anonKey ?? AppConfig.supabaseAnonKey;
+  }) : _supabaseUrl = supabaseUrl ?? AppConfig.supabaseUrl,
+       _anonKey = anonKey ?? AppConfig.supabaseAnonKey;
 
   final Dio _dio;
   final TokenStore _tokens;
@@ -47,10 +45,10 @@ class ApiClient {
   }
 
   Map<String, dynamic> _headers({bool auth = true}) => {
-        'apikey': _anonKey,
-        'Content-Type': 'application/json',
-        if (auth) ...?_authHeader(),
-      };
+    'apikey': _anonKey,
+    'Content-Type': 'application/json',
+    if (auth) ...?_authHeader(),
+  };
 
   Map<String, String>? _authHeader() {
     final token = _tokens.lastRead;
@@ -128,6 +126,24 @@ class ApiClient {
     throw Exception('insert returned no row: $table');
   }
 
+  /// 按条件更新并取回更新后的行。
+  /// 与 dbInsert 同理，不带 representation 则响应体为空。
+  Future<Map<String, dynamic>> dbUpdate(
+    String table, {
+    required Map<String, String> query,
+    required Map<String, dynamic> body,
+  }) async {
+    final res = await _dio.patch<dynamic>(
+      '$_supabaseUrl/rest/v1/$table',
+      queryParameters: query,
+      data: body,
+      options: Options(
+        headers: {..._headers(), 'Prefer': 'return=representation'},
+      ),
+    );
+    return _singleRow(res.data, table);
+  }
+
   Future<void> dbDelete(
     String table, {
     required Map<String, String> query,
@@ -168,9 +184,7 @@ class ApiClient {
     await _dio.put<void>(
       url,
       data: Stream.fromIterable([bytes]),
-      options: Options(
-        headers: {'Content-Type': 'application/octet-stream'},
-      ),
+      options: Options(headers: {'Content-Type': 'application/octet-stream'}),
     );
   }
 

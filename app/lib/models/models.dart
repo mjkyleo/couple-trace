@@ -19,6 +19,7 @@ class Couple {
     required this.inviteCode,
     this.userB,
     this.createdAt,
+    this.startedOn,
   });
 
   final String id;
@@ -26,6 +27,10 @@ class Couple {
   final String? userB;
   final String inviteCode;
   final DateTime? createdAt;
+  final DateTime? startedOn;
+
+  /// 双方都填上才算绑定完成；未成对的半成品空间不能进时光轴
+  bool get isPaired => userB != null && userB!.isNotEmpty;
 
   factory Couple.fromJson(Map<String, dynamic> json) => Couple(
         id: json['id'] as String,
@@ -34,6 +39,9 @@ class Couple {
         inviteCode: json['invite_code'] as String,
         createdAt: json['created_at'] != null
             ? DateTime.tryParse(json['created_at'] as String)
+            : null,
+        startedOn: json['started_on'] != null
+            ? DateTime.tryParse(json['started_on'] as String)
             : null,
       );
 }
@@ -77,6 +85,43 @@ class MomentMedia {
       };
 }
 
+/// 一条动态的评论；[parentId] 非空表示对某条评论的回复
+class MomentComment {
+  const MomentComment({
+    required this.id,
+    required this.momentId,
+    required this.authorId,
+    required this.body,
+    this.parentId,
+    this.createdAt,
+  });
+
+  final String id;
+  final String momentId;
+  final String authorId;
+  final String body;
+  final String? parentId;
+  final DateTime? createdAt;
+
+  factory MomentComment.fromJson(Map<String, dynamic> json) => MomentComment(
+        id: json['id'] as String,
+        momentId: json['moment_id'] as String,
+        authorId: json['author_id'] as String,
+        body: json['body'] as String,
+        parentId: json['parent_id'] as String?,
+        createdAt: json['created_at'] != null
+            ? DateTime.tryParse(json['created_at'] as String)
+            : null,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'moment_id': momentId,
+        'author_id': authorId,
+        'body': body,
+        'parent_id': parentId,
+      };
+}
+
 /// 一条动态
 class Moment {
   const Moment({
@@ -86,7 +131,9 @@ class Moment {
     this.content,
     this.createdAt,
     this.updatedAt,
+    this.locationText,
     this.media = const [],
+    this.comments = const [],
   });
 
   final String id;
@@ -95,7 +142,20 @@ class Moment {
   final String? content;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+
+  /// 手动输入的地点；经纬度留给后续地图 SDK
+  final String? locationText;
   final List<MomentMedia> media;
+  final List<MomentComment> comments;
+
+  /// updated_at 由数据库触发器在 UPDATE 时刷新，
+  /// 因此「晚于 created_at」即等价于「作者改过内容」。
+  bool get isEdited {
+    final c = createdAt;
+    final u = updatedAt;
+    if (c == null || u == null) return false;
+    return u.isAfter(c.add(const Duration(seconds: 1)));
+  }
 
   factory Moment.fromJson(Map<String, dynamic> json) => Moment(
         id: json['id'] as String,
@@ -108,15 +168,45 @@ class Moment {
         updatedAt: json['updated_at'] != null
             ? DateTime.tryParse(json['updated_at'] as String)
             : null,
+        locationText: json['location_text'] as String?,
+        media: _mediaFrom(json['moment_media']),
+        comments: _commentsFrom(json['moment_comments']),
       );
 
-  Moment copyWith({List<MomentMedia>? media}) => Moment(
+  /// PostgREST 的资源内嵌（`select=*,moment_media(*)`）返回数组；
+  /// 不带内嵌查询时该键缺失，此时保持空列表而不是抛类型转换异常。
+  static List<MomentMedia> _mediaFrom(dynamic raw) {
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(MomentMedia.fromJson)
+        .toList();
+  }
+
+  static List<MomentComment> _commentsFrom(dynamic raw) {
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(MomentComment.fromJson)
+        .toList();
+  }
+
+  Moment copyWith({
+    String? content,
+    String? locationText,
+    List<MomentMedia>? media,
+    List<MomentComment>? comments,
+    DateTime? updatedAt,
+  }) =>
+      Moment(
         id: id,
         coupleId: coupleId,
         publisherId: publisherId,
-        content: content,
+        content: content ?? this.content,
         createdAt: createdAt,
-        updatedAt: updatedAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+        locationText: locationText ?? this.locationText,
         media: media ?? this.media,
+        comments: comments ?? this.comments,
       );
 }

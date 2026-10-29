@@ -80,6 +80,125 @@ void main() {
       expect(withMedia.media, hasLength(1));
       expect(m.media, isEmpty);
     });
+
+    test('解析 PostgREST 内嵌的媒体与评论', () {
+      final m = Moment.fromJson({
+        'id': 'mom1',
+        'couple_id': 'c1',
+        'publisher_id': 'u1',
+        'content': '东湖散步',
+        'location_text': '东湖磨山',
+        'created_at': '2026-10-29T10:00:00+08:00',
+        'updated_at': '2026-10-29T10:00:00+08:00',
+        'moment_media': [
+          {
+            'id': 'mm1',
+            'moment_id': 'mom1',
+            'object_key': 'c1/a.jpg',
+            'media_type': 'image',
+          }
+        ],
+        'moment_comments': [
+          {
+            'id': 'c1',
+            'moment_id': 'mom1',
+            'author_id': 'u2',
+            'body': '好看',
+            'created_at': '2026-10-29T11:00:00+08:00',
+          },
+          {
+            'id': 'c2',
+            'moment_id': 'mom1',
+            'author_id': 'u1',
+            'body': '下次一起去',
+            'parent_id': 'c1',
+          },
+        ],
+      });
+      expect(m.locationText, '东湖磨山');
+      expect(m.media, hasLength(1));
+      expect(m.comments, hasLength(2));
+      expect(m.comments.last.parentId, 'c1');
+    });
+
+    test('无内嵌字段时媒体/评论为空列表而不是抛异常', () {
+      final m = Moment.fromJson({
+        'id': 'mom1',
+        'couple_id': 'c1',
+        'publisher_id': 'u1',
+      });
+      expect(m.media, isEmpty);
+      expect(m.comments, isEmpty);
+      expect(m.isEdited, isFalse);
+    });
+
+    test('updated_at 晚于 created_at 才算已编辑', () {
+      Moment at({required String c, required String u}) => Moment.fromJson({
+            'id': 'x',
+            'couple_id': 'c1',
+            'publisher_id': 'u1',
+            'created_at': c,
+            'updated_at': u,
+          });
+      expect(
+        at(
+          c: '2026-10-29T10:00:00Z',
+          u: '2026-10-29T12:30:00Z',
+        ).isEdited,
+        isTrue,
+      );
+      expect(
+        at(
+          c: '2026-10-29T10:00:00Z',
+          u: '2026-10-29T10:00:00Z',
+        ).isEdited,
+        isFalse,
+      );
+      // 触发器与默认值之间有毫秒级偏差，1 秒内不算编辑
+      expect(
+        at(
+          c: '2026-10-29T10:00:00Z',
+          u: '2026-10-29T10:00:00.400Z',
+        ).isEdited,
+        isFalse,
+      );
+    });
+  });
+
+  group('MomentComment', () {
+    test('fromJson 与 toJson 字段一致', () {
+      final c = MomentComment.fromJson({
+        'id': 'cm1',
+        'moment_id': 'mom1',
+        'author_id': 'u2',
+        'body': '回复内容',
+        'parent_id': 'cm0',
+      });
+      expect(c.parentId, 'cm0');
+      expect(c.toJson()['author_id'], 'u2');
+      expect(c.toJson()['parent_id'], 'cm0');
+    });
+  });
+
+  group('Couple.isPaired', () {
+    test('user_b 为空表示对方还没加入', () {
+      final pending = Couple.fromJson({
+        'id': 'c1',
+        'user_a': 'u1',
+        'invite_code': 'A7K2Q9X4',
+      });
+      expect(pending.isPaired, isFalse);
+      final paired = Couple.fromJson({
+        'id': 'c1',
+        'user_a': 'u1',
+        'user_b': 'u2',
+        'invite_code': 'A7K2Q9X4',
+        'started_on': '2025-08-02',
+      });
+      expect(paired.isPaired, isTrue);
+      expect(paired.startedOn, isNotNull);
+      expect(paired.startedOn!.year, 2025);
+    });
   });
 
   group('Couple.fromJson', () {

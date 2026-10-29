@@ -54,20 +54,28 @@ MemFire PostgreSQL（唯一权威数据源）
 
 - 用户注册/登录（邮箱）
 - 情侣专属空间绑定（邀请码机制 + 数据库 RPC 安全绑定）
+- **绑定门禁**：空间未成对（`user_b` 为空）时停在邀请码页，不进时光轴
 - 每日文字动态记录、动态删除（云端与本地同步移除）
+- **作者编辑自己的动态**（文字与地点；服务端 `moment_update` 策略限定作者本人）
+- **评论与回复**（双方均可评论、可回复别人的评论；评论作者与动态作者均可删）
+- **动态附带定位**（手动输入文本；`location_lat/lng` 预留给后续地图 SDK）
 - 时间轴时光流展示 + 下拉刷新同步（双端各自刷新后一致，非 Realtime 推送）
-- 离线浏览（断网时读取 Drift 本地缓存）
+- 离线浏览（断网时读取 Drift 本地缓存，含评论与定位列）
 - 云函数签名 URL 换取 + 直传/直下封装（`StorageService`）
-- 本地媒体缓存目录与手动清理缓存
+- 本地媒体缓存目录与手动清理缓存（清理不动个性化偏好）
 
-待接入（MVP 骨架已留好，UI 尚未接真机能力）：
+媒体链路（客户端已接，需真机验证）：
 
-- 图片/视频选择与上传（需 `image_picker`，当前发布页为文字专用）
-- 上传前自动压缩（`flutter_image_compress` / `video_compress` 已在依赖中，未调用）
-- 视频播放（`video_player` 已在依赖中，预览页仅占位）
-- 时间轴加载媒体清单（`moment_media` 查询与展示）
-- 预览优先读本地缓存（当前直接走签名 URL）
-- 删除动态时一并清理云端媒体文件
+- `image_picker` 选图/选视频 → 图片经 `flutter_image_compress` 压缩 → 签名 URL 直传 → 写 `moment_media` 行
+- 时间轴与详情页 3 列缩略图网格（走签名 URL，不强制下载）；点击进全屏预览
+- 删除动态时一并删除对象存储文件，避免留下无人引用的计费对象
+- 视频按原文件直传（`video_compress` 已从依赖移除：其原生层未在 Dart 3.13 上验证）
+
+尚未实现：
+
+- 视频内嵌播放（`video_player` 在依赖中，预览页仍为占位）
+- 日历视图、心情打卡、"那年今天"回顾
+- 编辑时增删媒体（当前只能改文字与地点）
 
 ### 安全特性
 
@@ -85,7 +93,7 @@ MemFire PostgreSQL（唯一权威数据源）
 | 本地缓存 | Drift (SQLite) | 强类型本地缓存 |
 | 状态管理 | Riverpod | 轻量、易维护 |
 | 网络 | Dio | 统一 HTTP 客户端 |
-| 媒体压缩 | flutter_image_compress / video_compress | 上传前压缩 |
+| 媒体 | image_picker / flutter_image_compress / video_player | 选图选视频、上传前压缩、播放 |
 | BaaS | MemFire Cloud | PostgreSQL + Auth + 云函数，国内可访问 |
 | 对象存储 | COS / OSS / S3 / MinIO | 可插拔，自由切换 |
 
@@ -96,20 +104,26 @@ MemFire PostgreSQL（唯一权威数据源）
    - A 生成邀请码 → B 输入邀请码
    - 绑定成功生成唯一 `couple_id`
 2. **发布动态流程**
-   - 本地压缩图片/视频
+   - `image_picker` 选图/选视频
+   - 图片经 `flutter_image_compress` 压到长边 1600、质量 82（压缩失败退回原文件，不阻断发布）
    - 云函数获取上传预签名 URL
    - 直传文件到对象存储
-   - 写入 PostgreSQL 动态、媒体记录
+   - 写入 PostgreSQL 动态、媒体记录（单个文件失败只丢那一个，其余照常发布）
 3. **浏览流程**
-   - 联网：从云端拉取最新数据 → 覆盖本地缓存
+   - 联网：一条 `select=*,moment_media(*),moment_comments(*)` 内嵌查询拿回动态 + 媒体 + 评论
+   - 库还没执行 `schema_v2.sql` 时内嵌查询会失败，自动降级为只取动态
    - 离线：直接读取本地缓存
 4. **媒体加载流程**
-   - 预览页当前直接请求签名下载 URL 加载（本地缓存优先读取待接入）
-   - `CacheService.resolve()` 已实现「有缓存则本地读取、无缓存则签名下载并落盘」，目前 UI 仅接入手动清理缓存，预览还未调用它
-5. **删除流程**
+   - 列表缩略图与预览页走签名 URL 直读（`CacheService.signedUrl`，同一 key 在有效期内复用）
+   - `CacheService.resolve()` 已实现「有缓存则本地读取、无缓存则签名下载并落盘」，供离线播放接入时使用
+5. **编辑与评论流程**
+   - 作者 `PATCH moments` 改文字与地点；服务端策略限定 `publisher_id = auth.uid()`，列级授权只放开 `content` 与 `location_*`
+   - 「已编辑」标记来自 `updated_at` 触发器：`updated_at` 比 `created_at` 晚 1 秒以上才算改过
+   - 双方都能评论与回复（`parent_id` 自引用）；删除权限 = 评论作者本人 或 该动态作者
+6. **删除流程**
    - 删除云端数据库记录（`moment_media` 由外键级联删除）
    - 删除本地缓存记录
-   - 云端媒体文件删除尚未接入 UI（云函数 `delete_object` 接口已就绪）
+   - 同步调用云函数 `delete_object` 清理对象存储文件，不留孤儿对象
 
 ## 六、数据库设计
 
@@ -217,6 +231,45 @@ with (security_invoker = true) as
 select ...;
 ```
 
+### 5. 二期增量：`sql/schema_v2.sql`
+
+在 `schema.sql` 之后执行，幂等可重跑。**本机没有 Postgres，这批 SQL 只做过静态编写，必须在 MemFire SQL 编辑器里执行并跑文件末尾的自检清单。**
+
+```sql
+-- 动态可编辑：作者本人 + 改完仍须是自己空间的自己动态
+create policy moment_update on moments for update
+  using (publisher_id = auth.uid() and <本人情侣空间>)
+  with check (publisher_id = auth.uid() and <本人情侣空间>);
+
+-- updated_at 由触发器维护，"已编辑" 才有依据
+create trigger moments_set_updated_at before update on moments
+  for each row execute function set_updated_at();
+
+-- 评论表：parent_id 自引用实现回复；一层自引用足够表达「评论 + 楼中楼」
+create table moment_comments (
+  id uuid primary key default gen_random_uuid(),
+  moment_id uuid not null references moments(id) on delete cascade,
+  author_id uuid not null references auth.users(id),
+  parent_id uuid references moment_comments(id) on delete cascade,
+  body text not null check (char_length(body) between 1 and 500),
+  created_at timestamptz default now()
+);
+
+-- 列级授权：即使策略写漏，客户端也改不了归属列
+grant update (content, location_text, location_lat, location_lng) on moments to authenticated;
+grant update (started_on) on couples to authenticated;
+```
+
+v2 同时收紧了 v1 的两处插入策略：
+
+- `moment_insert` 原来只校验情侣归属，没校验 `publisher_id`，A 可以伪造「这条是 B 发的」；
+- `couple_insert` 原来没限制 `user_b`，可以跳过邀请码直接把任意 uuid 写成伴侣。
+
+两个易踩的坑，写在文件注释里也记在这里：
+
+- **不要在 RLS 的 `with check` 里用子查询自比对新旧行。** PG 是在新元组写入之后才求值 WITH CHECK，自引用子查询读到的就是新值，条件恒真、形同虚设。列不可变请用列级 `grant update (col)`。
+- **跨行约束（评论的 `parent_id` 必须属于同一条动态）CHECK 表达不了**，用 `before insert or update` 触发器。
+
 ## 七、云函数多存储适配架构
 
 ### 统一对外接口（永久不变）
@@ -313,17 +366,22 @@ class StorageService {
 }
 ```
 
-> 写库接口 `ApiClient.dbInsert` 带 `Prefer: return=representation`：
-> PostgREST 默认返回空响应体，缺这个头会让创建类流程在解析返回值时直接抛异常。
+> 写库接口 `ApiClient.dbInsert` / `dbUpdate` 都带 `Prefer: return=representation`：
+> PostgREST 默认返回空响应体，缺这个头会让创建与编辑流程在解析返回值时直接抛异常。
 
-### 页面结构（MVP 极简）
+### 页面结构
 
-- 登录页
-- 情侣绑定页
-- 时光轴主页
-- 发布动态页
-- 媒体预览页
-- 设置页
+- 登录页 `/login`
+- 情侣绑定页 `/bind`（创建空间 / 输入邀请码加入）
+- 时光轴主页 `/timeline`（绑定门禁 + 动态列表 + 媒体网格 + 下拉刷新）
+- 动态详情页 `/moment`（完整媒体 + 评论与回复）
+- 发布 / 编辑页 `/publish`（传 `Moment` 即进入编辑态）
+- 媒体预览页 `/preview`
+- 设置页 `/settings`（在一起起始日、字号、清理缓存、退出登录）
+
+UI 目前是 Material 3 的基本实现，只落了「两人各有固定配色」这一条设计令牌
+（自己琥珀 `#C08A18`、对方靛蓝 `#2F5D8C`，见 `lib/ui/theme.dart`）；
+对比稿里的双轨版式、日历视图等留到 UI 优化阶段。
 
 ## 九、缓存策略
 
@@ -361,14 +419,32 @@ class StorageService {
 cd storage-functions
 npm install
 npm run build
-npm test
+npm test          # 32 例
 
 # Flutter 客户端静态检查 + 单元测试
 cd ../app
 flutter pub get
-dart run build_runner build --delete-conflicting-outputs   # 生成 Drift 的 .g.dart，缺了 test 编译不过
-flutter analyze
-flutter test
+dart run build_runner build          # 生成 Drift 的 .g.dart，缺了 test 编译不过
+flutter analyze --no-fatal-infos
+flutter test                         # 44 例
+```
+
+> `--delete-conflicting-outputs` 在新版 build_runner 里已被移除，传了只会得到一条
+> `W These options have been removed and were ignored` 警告，直接 `build` 即可。
+
+本地环境（与 CI 钉在同一版本，避免"本地绿灯 CI 红灯"）：
+
+| | 版本 |
+|---|---|
+| Flutter | 3.47.8 stable |
+| Dart | 3.13.7（`app/pubspec.yaml` 的 `sdk: ^3.13.7`） |
+
+国内网络下 `storage.googleapis.com` 只有约 200KB/s，SDK 包 1.8GB 要下两个多小时；
+改用官方中国镜像 `storage.flutter-io.cn`（实测 3~5MB/s）：
+
+```bash
+export FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn
+export PUB_HOSTED_URL=https://pub.flutter-io.cn
 ```
 
 上述四项（云函数 build/test + Flutter analyze/test）已作为 CI 门禁跑在
@@ -378,21 +454,26 @@ flutter test
 
 1. 注册 MemFire Cloud，开启邮箱登录
 2. 执行 [`sql/schema.sql`](sql/schema.sql)，验证 RLS 权限
-3. 部署云函数多存储适配器（`storage-functions/`）
-4. 配置对应存储厂商环境变量（参考 `.env.example`）
-5. Flutter 初始化项目、依赖引入（`app/`）
-6. 完成登录、情侣绑定逻辑
-7. 完成动态文字 CRUD
-8. 接入存储上传、下载、缓存
-9. 双人真机联调、断网测试、权限测试
-10. 美化 UI、发布开源版本
+3. 执行 [`sql/schema_v2.sql`](sql/schema_v2.sql)（编辑/评论/定位/纪念日），跑文件末尾自检清单
+4. 部署云函数多存储适配器（`storage-functions/`）
+5. 配置对应存储厂商环境变量与鉴权环境变量（参考 `.env.example`）
+6. Flutter 初始化项目、依赖引入（`app/`）
+7. 完成登录、情侣绑定与绑定门禁逻辑
+8. 完成动态 CRUD：发布、编辑、删除
+9. 完成评论与回复、定位手动输入
+10. 接入存储上传、下载、缓存与媒体网格展示
+11. 双人真机联调、断网测试、权限测试（媒体链路目前只过了单元测试，未在真机跑过）
+12. 美化 UI、发布开源版本
 
 ## 十四、二期可扩展功能
 
 - 实时 Realtime 自动刷新
-- 动态点赞、评论
-- 纪念日倒计时
-- 心情打卡
+- 动态点赞
+- 纪念日倒计时（`anniversaries` 表已随 `schema_v2.sql` 建好，UI 未接）
+- 日历视图、心情打卡、「那年今天」回顾
+- 定位接入地图 SDK（`location_lat/lng` 已留列，当前只有手动文本）
+- 编辑动态时增删媒体
+- 视频内嵌播放（`video_player` 已在依赖中，预览页仍为占位）
 - 自动 LRU 缓存清理
 - 图片缩略图自动生成
 - 大视频断点续传

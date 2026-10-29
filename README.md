@@ -50,17 +50,24 @@ MemFire PostgreSQL（唯一权威数据源）
 
 ### 基础核心功能
 
+已实现（代码可跑通，接口与缓存链路完整）：
+
 - 用户注册/登录（邮箱）
-- 情侣专属空间绑定（邀请码机制）
-- 每日文字动态记录
-- 多张图片、短视频发布（自动压缩）
-- 时间轴时光流展示
-- 大图预览、视频播放
-- 动态删除
-- 双端实时同步（两台手机自动同步所有记录）
-- 离线浏览（无网络查看已缓存内容）
-- 本地媒体缓存、手动清理缓存
-- 动态数据本地备份
+- 情侣专属空间绑定（邀请码机制 + 数据库 RPC 安全绑定）
+- 每日文字动态记录、动态删除（云端与本地同步移除）
+- 时间轴时光流展示 + 下拉刷新同步（双端各自刷新后一致，非 Realtime 推送）
+- 离线浏览（断网时读取 Drift 本地缓存）
+- 云函数签名 URL 换取 + 直传/直下封装（`StorageService`）
+- 本地媒体缓存目录与手动清理缓存
+
+待接入（MVP 骨架已留好，UI 尚未接真机能力）：
+
+- 图片/视频选择与上传（需 `image_picker`，当前发布页为文字专用）
+- 上传前自动压缩（`flutter_image_compress` / `video_compress` 已在依赖中，未调用）
+- 视频播放（`video_player` 已在依赖中，预览页仅占位）
+- 时间轴加载媒体清单（`moment_media` 查询与展示）
+- 预览优先读本地缓存（当前直接走签名 URL）
+- 删除动态时一并清理云端媒体文件
 
 ### 安全特性
 
@@ -97,12 +104,12 @@ MemFire PostgreSQL（唯一权威数据源）
    - 联网：从云端拉取最新数据 → 覆盖本地缓存
    - 离线：直接读取本地缓存
 4. **媒体加载流程**
-   - 优先读取本地缓存
-   - 无缓存 → 请求签名下载 → 缓存到本地
+   - 预览页当前直接请求签名下载 URL 加载（本地缓存优先读取待接入）
+   - `CacheService.resolve()` 已实现「有缓存则本地读取、无缓存则签名下载并落盘」，目前 UI 仅接入手动清理缓存，预览还未调用它
 5. **删除流程**
-   - 删除云端数据库记录
-   - 云函数删除云端媒体文件
-   - 删除本地缓存记录与文件
+   - 删除云端数据库记录（`moment_media` 由外键级联删除）
+   - 删除本地缓存记录
+   - 云端媒体文件删除尚未接入 UI（云函数 `delete_object` 接口已就绪）
 
 ## 六、数据库设计
 
@@ -171,9 +178,44 @@ create policy media_select on moment_media for select using (
     and (c.user_a = auth.uid() or c.user_b = auth.uid())
   )
 );
+-- 只允许给自己发布的动态挂媒体；删除限本人情侣空间
+create policy media_insert on moment_media for insert with check (
+  exists (
+    select 1 from moments m join couples c on m.couple_id = c.id
+    where m.id = moment_media.moment_id
+      and m.publisher_id = auth.uid()
+      and (c.user_a = auth.uid() or c.user_b = auth.uid())
+  )
+);
+create policy media_delete on moment_media for delete using (
+  exists (
+    select 1 from moments m join couples c on m.couple_id = c.id
+    where m.id = moment_media.moment_id
+      and (c.user_a = auth.uid() or c.user_b = auth.uid())
+  )
+);
 ```
 
-> **勘误说明**：早期草案中 `media_select` 策略误写为 `m.id = moments.couple_id`（字段错配），本仓库 `sql/schema.sql` 已修正为 `m.id = moment_media.moment_id`，请以仓库脚本为准。
+> 客户端 `MomentService.addMedia` 会向 `moment_media` 写入，因此该表必须有 insert 策略；
+> 只有 select 策略时，写媒体记录会被 RLS 直接拒绝。
+
+### 4. 绑定 RPC 与辅助视图的权限约束
+
+```sql
+-- join_couple 是 security definer（需要绕过 RLS 更新 user_b），
+-- 因此必须自校验调用者，否则任何人都能替任意 uuid 完成绑定：
+if p_user is distinct from auth.uid() then
+  raise exception 'forbidden: can only join couple for the authenticated user';
+end if;
+
+revoke execute on function join_couple(text, uuid) from public, anon;
+grant execute on function join_couple(text, uuid) to authenticated;
+
+-- 视图必须以调用者身份执行，否则会以 owner（BYPASSRLS）权限读取全表
+create or replace view couple_moments_view
+with (security_invoker = true) as
+select ...;
+```
 
 ## 七、云函数多存储适配架构
 
@@ -226,6 +268,16 @@ export interface StorageProvider {
 STORAGE_PROVIDER=cos   # 可选：cos / oss / s3 / minio
 ```
 
+### 鉴权相关环境变量（必填，缺失即拒绝服务）
+
+| 变量 | 作用 | 缺失时的行为 |
+|---|---|---|
+| `TRACE_JWT_SECRET` | 用 MemFire/Supabase 项目 JWT 密钥对 Bearer token **验签**（HS256），取 `sub` 作为用户 id | 所有请求 401；不会退化成「只解码不验签」 |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | 校验 `objectKey` 前缀的 coupleId 确实属于当前用户 | 请求以 500 `auth_check_failed` 拒绝 |
+| `TRACE_ALLOW_INSECURE_DEV_AUTH=1` | 本地开发开关：允许无签名 token 与 `X-Trace-User-Id` 头 | 默认关闭；**生产开启等于任何人都能冒充任意用户** |
+
+完整模板见 [`storage-functions/.env.example`](storage-functions/.env.example)。
+
 ## 八、客户端架构
 
 ### 核心模块
@@ -238,26 +290,31 @@ STORAGE_PROVIDER=cos   # 可选：cos / oss / s3 / minio
 
 ### StorageService 核心封装
 
+真实实现见 [`app/lib/services/storage_service.dart`](app/lib/services/storage_service.dart)，
+签名请求统一走 `ApiClient`（负责注入 JWT 与云函数地址）：
+
 ```dart
 class StorageService {
-  final Dio dio;
-  StorageService(this.dio);
+  StorageService(this._api);
+  final ApiClient _api;
 
-  Future<String> getUploadSign(String key) async {
-    final res = await dio.post("/storage/get_upload_sign", data: {"objectKey": key});
-    return res.data["url"];
+  Future<String> getUploadSign(String objectKey) async {
+    final res = await _api.storageCall(
+      '/storage/get_upload_sign', {'objectKey': objectKey});
+    return res['url'] as String;
   }
 
-  Future<String> getDownloadSign(String key) async {
-    final res = await dio.post("/storage/get_download_sign", data: {"objectKey": key});
-    return res.data["url"];
+  Future<void> upload(String objectKey, List<int> bytes) async {
+    final url = await getUploadSign(objectKey);
+    await _api.uploadToSignedUrl(url, bytes);
   }
 
-  Future<void> deleteFile(String key) async {
-    await dio.post("/storage/delete_object", data: {"objectKey": key});
-  }
+  // getDownloadSign / download / deleteObject / buildObjectKey 同理
 }
 ```
+
+> 写库接口 `ApiClient.dbInsert` 带 `Prefer: return=representation`：
+> PostgREST 默认返回空响应体，缺这个头会让创建类流程在解析返回值时直接抛异常。
 
 ### 页面结构（MVP 极简）
 
@@ -281,10 +338,12 @@ class StorageService {
 1. 全部存储桶私有，禁止公开访问
 2. AK/SK 全部存放云函数环境变量
 3. 客户端**无任何密钥**
-4. 所有文件访问均为**限时签名 URL**
-5. 数据库 RLS 严格双人隔离
-6. 云函数统一鉴权，非法用户直接拦截
-7. 服务端校验文件格式、大小、路径合法性
+4. 所有文件访问均为**限时签名 URL**（上传 15 分钟 / 下载 30 分钟）
+5. 数据库 RLS 严格双人隔离；辅助视图带 `security_invoker`，绑定 RPC 校验 `auth.uid()`
+6. 云函数对 Bearer token **验签**后才认领身份，密钥缺失或签名不符一律 401；
+   情侣空间归属校验依赖的 Supabase 环境变量缺失时报错拒绝，而非默认放行
+7. 服务端校验 `objectKey` 字符集与路径合法性（拦 `..`、拦首尾斜杠、限长度）；
+   文件大小与 MIME 类型校验依赖桶策略/预签名约束，**尚未在云函数内实现**
 
 ## 十一、成本测算
 
@@ -298,16 +357,22 @@ class StorageService {
 ## 十二、测试
 
 ```bash
-# 云函数单元测试（Node >= 18）
+# 云函数类型检查 + 单元测试（Node >= 18）
 cd storage-functions
 npm install
+npm run build
 npm test
 
 # Flutter 客户端静态检查 + 单元测试
-cd app
+cd ../app
+flutter pub get
+dart run build_runner build --delete-conflicting-outputs   # 生成 Drift 的 .g.dart，缺了 test 编译不过
 flutter analyze
 flutter test
 ```
+
+上述四项（云函数 build/test + Flutter analyze/test）已作为 CI 门禁跑在
+[`verify` job](.github/workflows/build-apk.yml) 中：任一项失败都不会继续构建 APK。
 
 ## 十三、开发步骤
 

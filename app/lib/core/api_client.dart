@@ -100,16 +100,32 @@ class ApiClient {
     return res.data ?? const [];
   }
 
+  /// 写入一行并取回真实数据。
+  /// 必须带 `Prefer: return=representation`：PostgREST 默认响应体为空，
+  /// 少了这个头，调用方拿到空 Map 后在 fromJson 的强转处必挂。
   Future<Map<String, dynamic>> dbInsert(
     String table,
     Map<String, dynamic> body,
   ) async {
-    final res = await _dio.post<Map<String, dynamic>>(
+    final res = await _dio.post<dynamic>(
       '$_supabaseUrl/rest/v1/$table',
       data: body,
-      options: Options(headers: _headers()),
+      options: Options(
+        headers: {..._headers(), 'Prefer': 'return=representation'},
+      ),
     );
-    return res.data ?? const {};
+    return _singleRow(res.data, table);
+  }
+
+  static Map<String, dynamic> _singleRow(dynamic data, String table) {
+    if (data is List) {
+      if (data.isEmpty || data.first is! Map) {
+        throw Exception('insert returned no row: $table');
+      }
+      return Map<String, dynamic>.from(data.first as Map);
+    }
+    if (data is Map) return Map<String, dynamic>.from(data);
+    throw Exception('insert returned no row: $table');
   }
 
   Future<void> dbDelete(

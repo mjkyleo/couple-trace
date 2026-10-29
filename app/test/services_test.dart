@@ -6,6 +6,7 @@ import 'package:trace_app/core/api_client.dart';
 import 'package:trace_app/core/token_store.dart';
 import 'package:trace_app/services/auth_service.dart';
 import 'package:trace_app/services/couple_service.dart';
+import 'package:trace_app/services/moment_service.dart';
 import 'package:trace_app/services/storage_service.dart';
 
 import 'fakes.dart';
@@ -102,19 +103,57 @@ void main() {
       tokens.write(makeTestJwt('user-001'));
       adapter.onRequest = (options) {
         expect(options.uri.path, endsWith('/rest/v1/couples'));
+        // PostgREST 只有带上该头才会返回写入的行，缺了则为空 body
+        expect(options.headers['Prefer'], 'return=representation');
         final body = decodeBody(options);
         expect(body['user_a'], 'user-001');
         expect(body['invite_code'], hasLength(8));
-        return jsonResponse({
-          'id': 'c1',
-          'user_a': 'user-001',
-          'invite_code': body['invite_code'],
-        });
+        return jsonResponse([
+          {
+            'id': 'c1',
+            'user_a': 'user-001',
+            'invite_code': body['invite_code'],
+          }
+        ]);
       };
       final couple =
           await CoupleService(makeApi(adapter, tokens)).createCouple();
       expect(couple.id, 'c1');
       expect(couple.inviteCode, hasLength(8));
+      expect(couple.userA, 'user-001');
+    });
+
+    test('dbInsert 未返回行时抛异常，而不是把空 Map 推进 fromJson', () async {
+      final adapter = FakeDioAdapter();
+      adapter.onRequest = (options) => jsonResponse([]);
+      final api = makeApi(adapter, InMemoryTokenStore());
+      expect(
+        () => api.dbInsert('moments', {'content': 'x'}),
+        throwsA(isA<Exception>()),
+      );
+    });
+
+    test('addMedia 解析 representation 数组响应', () async {
+      final adapter = FakeDioAdapter();
+      final tokens = InMemoryTokenStore();
+      adapter.onRequest = (options) {
+        expect(options.uri.path, endsWith('/rest/v1/moment_media'));
+        expect(options.headers['Prefer'], 'return=representation');
+        return jsonResponse([
+          {
+            'id': 'm1',
+            'moment_id': 'moment-1',
+            'object_key': 'c1/photo.jpg',
+            'media_type': 'image',
+            'sort': 0,
+          }
+        ]);
+      };
+      final media = await MomentService(makeApi(adapter, tokens))
+          .addMedia('moment-1', 'c1/photo.jpg', 'image');
+      expect(media.id, 'm1');
+      expect(media.objectKey, 'c1/photo.jpg');
+      expect(media.mediaType, 'image');
     });
 
     test('joinCouple 调用 join_couple RPC 并回查', () async {

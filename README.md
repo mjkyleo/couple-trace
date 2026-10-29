@@ -441,7 +441,7 @@ cd ../app
 flutter pub get
 dart run build_runner build          # 生成 Drift 的 .g.dart，缺了 test 编译不过
 flutter analyze --no-fatal-infos
-flutter test                         # 44 例
+flutter test                         # 55 例（另有 10 例界面快照默认 skip）
 ```
 
 > `--delete-conflicting-outputs` 在新版 build_runner 里已被移除，传了只会得到一条
@@ -478,7 +478,8 @@ export PUB_HOSTED_URL=https://pub.flutter-io.cn
 9. 完成动态 CRUD：发布、编辑、删除
 10. 完成评论与回复、定位手动输入
 11. 接入存储上传、下载、缓存与媒体网格展示
-12. 双人真机联调、断网测试、权限测试（媒体链路目前只过了单元测试，未在真机跑过）
+12. 双人真机联调、断网测试、权限测试（模拟器已验证启动、登录页渲染、网络失败不闪退，见第十六节；
+    媒体上传链路仍只过了单元测试，因为后端地址还没配）
 13. 美化 UI、发布开源版本
 
 ## 十四、二期可扩展功能
@@ -519,6 +520,68 @@ export PUB_HOSTED_URL=https://pub.flutter-io.cn
 3. 修改云函数环境变量
 
 即可**一键部署属于自己的双人私密记录 App**。
+
+## 十六、Android 本地构建与模拟器运行（实测）
+
+仓库不含 `app/android/`，先现场生成再构建：
+
+```bash
+cd app
+flutter create . --platforms android --project-name trace_app
+flutter build apk --debug      # build/app/outputs/flutter-apk/app-debug.apk
+```
+
+工具链（本机实测版本，与 CI 对齐）：
+
+| 组件 | 版本 / 位置 |
+|---|---|
+| Android SDK | `%LOCALAPPDATA%\Android\Sdk`（platforms 35/36，build-tools 35/36，platform-tools 35.0.2） |
+| cmdline-tools | `Sdk\cmdline-tools\latest`（13114758） |
+| JDK | Temurin 17.0.20.1 —— CI 用 `java-version: '17'`，`JAVA_HOME` 必须指对，否则 `sdkmanager` 直接拒绝运行 |
+| Gradle / AGP / Kotlin | 9.3.1 / 9.1.0 / 2.4.0，由 `flutter create` 模板决定 |
+
+国内网络两个必踩的坑：
+
+1. `services.gradle.org/distributions/gradle-*-all.zip` 重定向后连不通（下载 0 字节）。
+   从腾讯镜像拉同一个包，解压进 wrapper 缓存并补 `.ok` 标记即可，**不用**改 `distributionUrl`：
+   ```bash
+   D=~/.gradle/wrapper/dists/gradle-9.3.1-all/<hash>   # <hash> 由 URL 哈希而来，跑一次构建后目录会自动出现
+   curl -L -o $D/gradle-9.3.1-all.zip https://mirrors.cloud.tencent.com/gradle/gradle-9.3.1-all.zip
+   cd $D && unzip -q gradle-9.3.1-all.zip && touch gradle-9.3.1-all.zip.ok
+   ```
+2. Kotlin 2.4 的增量编译在 Windows 上并行编译多个插件模块时会抛
+   `Could not close incremental caches` / `Storage ... is already registered`，
+   停 daemon、删 `app/build` 都躲不过。已在 `app/android/gradle.properties` 里
+   `kotlin.incremental=false` 绕过 —— 插件模块没有本地 Kotlin 源码，增量编译没有收益。
+
+模拟器（`emulator -accel-check` 需报 WHPX usable）：
+
+```bash
+avdmanager create avd -n trace_pixel7 \
+  -k "system-images;android-36;google_apis_playstore;x86_64" -d pixel_7
+emulator -avd trace_pixel7 -no-boot-anim -no-audio &
+adb wait-for-device && adb install -r -t build/app/outputs/flutter-apk/app-debug.apk
+adb shell am start -n com.traceapp.trace_app/.MainActivity
+adb exec-out screencap -p > screen.png
+```
+
+真机跑过什么：
+
+- **已验证**：debug 包在 Android 16 模拟器上正常启动；登录页渲染与离线快照一致；
+  `flutter_secure_storage` 与 Drift 初始化不崩；点登录后网络失败会在页面上给出错误文本而不是闪退。
+  错误文本走 `lib/core/error_text.dart`，模拟器实测显示的是「连不上服务器，检查一下网络再试」，
+  不再是 `DioException [connection error]: ... errno = 7` 这类原始异常串（原始串只进日志）。
+- **未验证**：任何需要后端的链路（注册/绑定/发布/上传/下载/播放）。
+  `AppConfig` 的三个 `--dart-define` 至今是占位值，拿不到真实地址就只能停在登录页。
+- **未验证**：release 包，因为下面两个缺口。
+
+release 包目前的两个缺口：
+
+1. `INTERNET` 权限只写在 `app/src/debug|profile/AndroidManifest.xml` 里，
+   `main` 清单没有 —— CI 产出的 release APK 根本连不上网。
+2. CI 的 `flutter create` 不带 `--org`，得到 `com.example.trace_app`；
+   本地带 `--org com.traceapp` 得到 `com.traceapp.trace_app`。两边 applicationId 不一致，
+   装在同一台手机上就是两个 App。
 
 ## License
 

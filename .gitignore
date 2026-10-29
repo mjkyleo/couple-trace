@@ -38,3 +38,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.tmp
+
+# UI 快照产物：本机字体渲染，跨环境必抖动，不入库
+app/test/goldens/
